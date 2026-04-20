@@ -1,274 +1,82 @@
-Here’s your **fully corrected README (Option B only, clean + consistent)** — ready to copy-paste 👇
 
----
 
 ```markdown
-# SDN QoS Priority Controller (Option B — Direct Execution)
+# SDN QoS Priority Controller
 
 ## Overview
-
-This project implements a simple SDN controller using Ryu that prioritizes different types of network traffic. The controller gives higher priority to UDP traffic compared to TCP using OpenFlow rules and OVS queues.
-
----
-
-## Objective
-
-- Identify traffic types (UDP, TCP, etc.)
-- Assign higher priority to UDP
-- Assign lower priority to TCP
-- Install flow rules dynamically using SDN
-- Enforce traffic shaping using OVS QoS queues
-
----
-
-## Tools Used
-
-| Tool | Version |
-|------|---------|
-| Python | 3.10 |
-| Ryu Controller | — |
-| Mininet | — |
-| Open vSwitch | — |
-| OpenFlow | 1.3 |
-
----
+This project implements an SDN controller using Ryu that prioritizes UDP traffic over TCP. By using OpenFlow 1.3, we dynamically install flow rules that ensure high-priority traffic bypasses buffer congestion.
 
 ## Network Topology
-
-A custom topology is created using the Mininet Python API, consisting of:
-
-- **3 Hosts:** h1, h2, h3  
-- **3 Switches:** s1, s2, s3  
+A linear topology with bandwidth constraints to simulate a real-world bottleneck.
 
 ```
-
-h1 — s1 — s2 — s3 — h3
-|
-h2
-
-````
+h1 (User) — s1 — s2 (Bottleneck) — s3 — h3 (Attacker/Flood)
+                  |
+                 h2 (Server)
+```
 
 ---
 
 ## How It Works
-
-1. When a packet arrives at a switch with no existing rule, it is sent to the controller.  
-2. The controller inspects the protocol:  
-   - **UDP** → high priority (100) → queue 100  
-   - **TCP** → low priority (10) → queue 10  
-3. A flow rule with `OFPActionSetQueue` is installed in the switch.  
-4. Future matching packets are handled directly by the switch using the assigned queue.  
-
-> **Note:** OpenFlow priority alone does not control bandwidth. OVS queues are required to enforce traffic shaping.
-
----
-
-## Flow Rules
-
-| Traffic | Protocol | Priority | Queue |
-|---------|----------|----------|-------|
-| UDP     | 17       | 100      | 100   |
-| TCP     | 6        | 10       | 10    |
-| Others  | Any      | 1        | —     |
-| ARP     | —        | Flood    | —     |
+1. **Control Plane:** Ryu inspects initial packets. 
+   - **UDP:** Assigned Priority 100
+   - **TCP:** Assigned Priority 10
+2. **Data Plane:** Mininet switches (OVS) enforce these priorities. When the 1Mbps link is saturated, the switch processes Priority 100 packets first.
 
 ---
 
 ## Steps to Run
 
-### Terminal 1 — Start the Controller
-
+### 1. Start the Controller
 ```bash
-cd ~/CN
-source ryu-env/bin/activate
 ryu-manager qos.py
-````
+```
 
----
-
-### Terminal 2 — Run Topology
-
+### 2. Start Mininet (with Traffic Control)
 ```bash
-sudo python3 topology.py
+sudo mn --controller=remote --custom topology.py --topo=customtopo --link=tc --switch=ovsk,protocols=OpenFlow13
 ```
 
-This will:
-
-* Create the Mininet network
-* Connect to the Ryu controller
-* Apply QoS queues automatically (`setup_qos()`)
-* Launch the Mininet CLI
-
 ---
 
-## Important Notes
+## QoS Latency Experiment
 
-* Do NOT run `mn --custom`
-* Do NOT manually configure QoS
-* Everything is handled inside `topology.py`
-
----
-
-## Testing Commands (inside Mininet CLI)
-
-### Check Connectivity
-
+### Situation 1: No Congestion
+**Goal:** Establish baseline latency.
 ```bash
-pingall
+h1 ping -c 50 -i 0.2 h2
 ```
 
+### Situation 2: QoS ON (Congested)
+**Goal:** Test UDP performance while TCP floods the network.
+1. **h2 (Server):** `h2 iperf -s &`
+2. **h3 (Flood):** `h3 iperf -c h2 -t 60 -P 20 &`
+3. **h1 (Record):** `h1 ping -c 100 -i 0.2 h2`
+
+### Situation 3: QoS OFF (Congested)
+**Goal:** See the impact of "Best Effort" delivery without priorities.
+1. **Stop Ryu**, then run: `ryu-manager ryu.app.simple_switch_13`
+2. **Restart Mininet:** `sudo mn -c && sudo mn --controller=remote --custom topology.py --topo=customtopo --link=tc --switch=ovsk,protocols=OpenFlow13`
+3. **Repeat Situation 2 commands.**
+
 ---
 
-## Experiment 1 — UDP Only
+## Results Table
 
-```bash
-# Warmup
-h1 ping -c 10 -i 0.2 h2
+| Situation | Avg Latency (ms) | Max Latency (ms) | Mdev (Stability) |
+|-----------|------------------|------------------|------------------|
+| No Load   |                  |                  |                  |
+| QoS ON    |                  |                  |                  |
+| QoS OFF   |                  |                  |                  |
 
-# Start UDP server
-h2 iperf -s -u &
-
-# Measure latency
-h1 ping -c 100 -i 0.2 h2
+### Verification Command
+To see the rules in the switch during the test:
+`sudo ovs-ofctl -O OpenFlow13 dump-flows s2`
 ```
 
-Cleanup:
 
-```bash
-h2 pkill iperf
-```
 
----
-
-## Experiment 2 — UDP + TCP (QoS ON)
-
-```bash
-# Start TCP server
-h2 iperf -s &
-
-# Generate TCP congestion
-h3 iperf -c h2 -t 60 -i 1 -P 4 &
-
-# Warmup
-h1 ping -c 10 -i 0.2 h2
-
-# Measure latency
-h1 ping -c 100 -i 0.2 h2
-```
-
-Cleanup:
-
-```bash
-h2 pkill iperf
-h3 pkill iperf
-```
-
----
-
-## Experiment 3 — QoS OFF (Comparison)
-
-### Step 1 — Exit Mininet
-
-```bash
-exit
-sudo mn -c
-```
-
----
-
-### Step 2 — Start Default Controller (No QoS)
-
-```bash
-ryu-manager ryu.app.simple_switch_13
-```
-
----
-
-### Step 3 — Run Topology Again
-
-```bash
-sudo python3 topology.py
-```
-
----
-
-### Step 4 — Repeat Experiment
-
-```bash
-h2 iperf -s &
-h3 iperf -c h2 -t 60 -i 1 -P 4 &
-h1 ping -c 10 -i 0.2 h2
-h1 ping -c 100 -i 0.2 h2
-```
-
----
-
-## Expected Results
-
-| Scenario | Expected Behavior               |
-| -------- | ------------------------------- |
-| UDP only | Low latency                     |
-| QoS ON   | Stable latency under congestion |
-| QoS OFF  | Higher latency spikes           |
-
----
-
-## Results
-
-| Situation     | min (ms) | avg (ms) | max (ms) | mdev (ms) |
-| ------------- | -------- | -------- | -------- | --------- |
-| 1 — UDP alone | 0.037    | 0.084    | 1.019    | 0.116     |
-| 2 — QoS ON    | 0.028    | 0.127    | 3.021    | 0.328     |
-| 3 — QoS OFF   | 0.030    | 0.088    | 1.255    | 0.146     |
-
----
-
-## Analysis
-
-* OpenFlow priority only controls rule matching, not bandwidth
-* OVS queues enforce actual traffic shaping
-* Without QoS, TCP congestion affects latency more
-* With QoS, UDP traffic maintains better performance under load
-
----
-
-## Common Errors and Fixes
-
-| Error                     | Fix                            |
-| ------------------------- | ------------------------------ |
-| Address already in use    | `h2 pkill iperf`               |
-| No QoS effect             | Ensure `setup_qos()` runs      |
-| Controller not connecting | Check `ryu-manager` is running |
-
----
-
-## Summary
-
-| Component     | Where it runs |
-| ------------- | ------------- |
-| Controller    | Terminal 1    |
-| Mininet + QoS | Terminal 2    |
-| CLI           | Inside script |
-
----
-
-## Key Concept
-
-OpenFlow priority ≠ bandwidth control
-QoS queues are required for real traffic shaping
-
-```
-
----
-
-This version is:
-✔ Fully consistent with **Option B**  
-✔ No leftover `mn --custom`  
-✔ Clean for submission  
-
----
-
-If you want next step, I can help you:
-- add **architecture diagram (for marks)**
-- or **proof commands to show queues working (very important in viva)**
-```
+### Why this version is better:
+* **The `--link=tc` flag:** This tells Mininet to actually load the Linux Traffic Control module, which is required for the `bw=1` setting to work.
+* **Parallelism (`-P 20`):** By using 20 streams instead of 4, you ensure that the TCP windowing mechanism doesn't "accidentally" leave gaps for your pings.
+* **Linear Bottleneck:** By setting the links between `s1-s2` and `s2-s3` to 1Mbps, you create a "funnel" at `s2` that forces the QoS logic to trigger.
