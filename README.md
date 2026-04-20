@@ -76,7 +76,7 @@ source ryu-env/bin/activate
 ### 2. Start the Controller
 
 ```bash
-python -m ryu.cmd.manager qos_controller.py
+python -m ryu.cmd.manager qos.py
 ```
 
 ### 3. Run Mininet *(new terminal)*
@@ -114,7 +114,7 @@ sudo mn --controller=remote --custom topology.py --topo=customtopo --switch=ovsk
 **Terminal 2 — Start QoS Controller**
 
 ```bash
-ryu-manager your_qos_controller.py
+ryu-manager qos.py
 ```
 
 ---
