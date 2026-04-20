@@ -2,7 +2,7 @@
 
 ## Overview
 
-This project implements a simple SDN controller using Ryu that prioritizes different types of network traffic. The controller gives higher priority to UDP traffic compared to TCP using OpenFlow rules.
+This project implements a simple SDN controller using Ryu that prioritizes different types of network traffic. The controller gives higher priority to UDP traffic compared to TCP using OpenFlow rules and OVS queues.
 
 ---
 
@@ -12,6 +12,7 @@ This project implements a simple SDN controller using Ryu that prioritizes diffe
 - Assign higher priority to UDP
 - Assign lower priority to TCP
 - Install flow rules dynamically using SDN
+- Enforce traffic shaping using OVS QoS queues
 
 ---
 
@@ -40,52 +41,80 @@ h1 — s1 — s2 — s3 — h3
          h2
 ```
 
+### Switch Port Map
+
+| Switch | Port | Connected to |
+|--------|------|--------------|
+| s1 | s1-eth1 | h1 |
+| s1 | s1-eth2 | s2 |
+| s2 | s2-eth1 | s1 |
+| s2 | s2-eth2 | h2 |
+| s2 | s2-eth3 | s3 |
+| s3 | s3-eth1 | s2 |
+| s3 | s3-eth2 | h3 |
+
 ---
 
 ## How It Works
 
 1. When a packet arrives at a switch with no existing rule, it is sent to the controller.
 2. The controller inspects the protocol:
-   - **UDP** → high priority (100)
-   - **TCP** → low priority (10)
-3. A flow rule is installed in the switch based on the protocol.
-4. Future matching packets are handled directly by the switch.
+   - **UDP** → high priority (100) → queue 100 (high bandwidth)
+   - **TCP** → low priority (10) → queue 10 (limited bandwidth)
+3. A flow rule with `OFPActionSetQueue` is installed in the switch.
+4. Future matching packets are handled directly by the switch using the assigned queue.
+
+> **Note:** OpenFlow priority alone only controls which rule matches first — it does not limit bandwidth. OVS queues are required to actually enforce traffic shaping.
 
 ---
 
 ## Flow Rules
 
-| Traffic | Protocol | Priority |
-|---------|----------|----------|
-| UDP     | 17       | 100      |
-| TCP     | 6        | 10       |
-| Others  | Any      | 1        |
-| ARP     | —        | Flood    |
+| Traffic | Protocol | Priority | Queue |
+|---------|----------|----------|-------|
+| UDP     | 17       | 100      | 100   |
+| TCP     | 6        | 10       | 10    |
+| Others  | Any      | 1        | —     |
+| ARP     | —        | Flood    | —     |
 
 ---
 
 ## Steps to Run
 
-### 1. Activate Virtual Environment
+### Terminal 1 — Start the Controller
 
 ```bash
 cd ~/CN
 source ryu-env/bin/activate
+ryu-manager qos.py
 ```
 
-### 2. Start the Controller
+### Terminal 2 — Start Mininet
 
 ```bash
-python -m ryu.cmd.manager qos.py
+sudo mn --controller=remote --custom topology.py --topo=customtopo --switch=ovsk,protocols=OpenFlow13
 ```
 
-### 3. Run Mininet *(new terminal)*
+### Terminal 3 — Set Up OVS QoS Queues
+
+Run this once after Mininet starts:
 
 ```bash
-sudo mn --custom topology.py --topo customtopo --controller=remote
+for PORT in s1-eth1 s1-eth2 s2-eth1 s2-eth2 s2-eth3 s3-eth1 s3-eth2; do
+  sudo ovs-vsctl set port $PORT qos=@newqos -- \
+    --id=@newqos create qos type=linux-htb \
+    queues:100=@q100 queues:10=@q10 -- \
+    --id=@q100 create queue other-config:min-rate=10000000 -- \
+    --id=@q10 create queue other-config:max-rate=1000000
+done
 ```
 
-### 4. Test Connectivity
+| Queue | Rate | Used by |
+|-------|------|---------|
+| 100 | min 10 Mbps | UDP |
+| 10 | max 1 Mbps | TCP |
+
+### Terminal 2 — Test Connectivity
 
 ```bash
 pingall
@@ -94,8 +123,6 @@ pingall
 ---
 
 ## QoS Latency Experiment
-
-### Terminal Setup
 
 **Terminal 1 — Start Mininet**
 
@@ -152,7 +179,7 @@ h2 pkill iperf
 
 ### Situation 2 — UDP + TCP Competing, QoS ON
 
-> Ryu QoS controller is running — UDP gets priority 100, TCP gets priority 10.
+> Ryu QoS controller is running — UDP gets priority 100 (queue 100), TCP gets priority 10 (queue 10).
 
 ```bash
 # Start TCP server on h2
@@ -231,9 +258,9 @@ h1 ping -c 100 -i 0.2 h2
 
 | Situation | min (ms) | avg (ms) | max (ms) | mdev (ms) |
 |-----------|----------|----------|----------|-----------|
-| 1 — UDP alone | | | | |
-| 2 — QoS ON, competing | | | | |
-| 3 — QoS OFF, competing | | | | |
+| 1 — UDP alone | 0.037 | 0.084 | 1.019 | 0.116 |
+| 2 — QoS ON, competing | 0.028 | 0.127 | 3.021 | 0.328 |
+| 3 — QoS OFF, competing | 0.030 | 0.088 | 1.255 | 0.146 |
 
 ### What to Look For
 
@@ -241,7 +268,17 @@ h1 ping -c 100 -i 0.2 h2
 - **`max`** — Worst case during congestion; shows QoS impact most clearly
 - **`mdev`** — Stability; how much latency varied (lower is better)
 
-> **Expected result:** `avg` and `max` should stay low in Situation 2 but spike noticeably in Situation 3 — proving the priority rules are working.
+### Analysis
+
+The results from the initial run (without OVS queues) showed Situation 2 performing worse than Situation 3, which is the opposite of expected. This is because:
+
+- **OpenFlow priority alone does not shape bandwidth** — it only controls rule matching order, not actual traffic rates.
+- **ICMP (ping) gets priority 1** — the measurement traffic itself was the lowest priority on the network.
+- **Mininet runs on one machine** — controller round-trips during flow rule installation added latency spikes in Situation 2.
+
+The fix is to configure OVS queues (see Terminal 3 setup above) and use `OFPActionSetQueue` in the controller so traffic is actually rate-limited at the switch level.
+
+> **Expected result after fix:** `avg` and `max` should stay low in Situation 2 but spike noticeably in Situation 3 — proving the priority rules and queues are working.
 
 ---
 
@@ -251,3 +288,4 @@ h1 ping -c 100 -i 0.2 h2
 |-------|-----|
 | `listener bind failed: Address already in use` | Run `h2 pkill iperf` then retry |
 | `bash: kill: %1: no such job` | Process already stopped — ignore and continue |
+| QoS ON performs worse than QoS OFF | OVS queues not configured — run the Terminal 3 queue setup script |
