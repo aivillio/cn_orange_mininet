@@ -92,7 +92,7 @@ ryu-manager qos.py
 ### Terminal 2 — Start Mininet
 
 ```bash
-sudo mn --controller=remote --custom topology.py --topo=customtopo --switch=ovsk,protocols=OpenFlow13
+sudo python3 topology.py
 ```
 
 ### Terminal 3 — Set Up OVS QoS Queues
