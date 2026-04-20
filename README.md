@@ -1,4 +1,93 @@
+That command is a great "sanity check" to prove that the network is actually under stress. I've integrated it into the **Situation 2** and **Situation 3** flows in the README so you can verify the port congestion in real-time.
+
+---
+
+## 📝 Updated `README.md`
+
+```markdown
 # SDN QoS Priority Controller
+
+## Overview
+This project implements an SDN controller using Ryu that prioritizes UDP traffic over TCP. By using OpenFlow 1.3, we dynamically install flow rules that ensure high-priority traffic bypasses buffer congestion.
+
+## Network Topology
+A linear topology with tight bandwidth constraints (0.5 Mbps) and a limited buffer (queue size 10) to force observable congestion.
+
+```
+h1 (Testing) — s1 — s2 (Bottleneck) — s3 — h3 (Flood Source)
+                  |
+                 h2 (Target Server)
+```
+
+---
+
+## How It Works
+1. **Control Plane:** Ryu inspects initial packets via `PacketIn`. 
+   - **UDP:** Priority 100
+   - **TCP:** Priority 10
+2. **Data Plane:** Mininet switches (OVS) enforce these priorities. Because the buffer is limited to 10 packets, Priority 100 packets are moved to the front of the queue, while lower priority packets wait or are dropped.
+
+---
+
+## Steps to Run
+
+### 1. Start the Controller
+```bash
+ryu-manager qos.py
+```
+
+### 2. Start Mininet
+```bash
+sudo mn --controller=remote --custom topology.py --topo=customtopo --link=tc --switch=ovsk,protocols=OpenFlow13
+```
+
+---
+
+## QoS Latency Experiment
+
+### Situation 1: No Congestion (Baseline)
+```bash
+h1 ping -c 50 -i 0.2 h2
+```
+
+### Situation 2: QoS ON (Congested)
+1. **h2 (Server):** `h2 iperf -s &`
+2. **h3 (Flood):** `h3 iperf -c h2 -t 60 -P 20 &`
+3. **Verify Congestion (External Terminal):**
+   Run this to see if the switch ports are dropping or queuing packets:
+   ```bash
+   sudo ovs-ofctl -O OpenFlow13 dump-ports-desc s2
+   ```
+4. **h1 (Record):** `h1 ping -c 100 -i 0.2 h2`
+
+### Situation 3: QoS OFF (Congested)
+1. **Switch Controller:** Stop `qos.py` and run `ryu-manager ryu.app.simple_switch_13`.
+2. **Restart Mininet:** `sudo mn -c && sudo mn --controller=remote --custom topology.py --topo=customtopo --link=tc --switch=ovsk,protocols=OpenFlow13`
+3. **Repeat Situation 2 steps:** Run the `iperf` flood and record the `h1` ping results. Compare the `avg` and `max` latency.
+
+---
+
+## Results Table
+
+| Situation | Avg Latency (ms) | Max Latency (ms) | Mdev (Stability) |
+|-----------|------------------|------------------|------------------|
+| No Load   |                  |                  |                  |
+| QoS ON    |                  |                  |                  |
+| QoS OFF   |                  |                  |                  |
+
+### Verification of Flow Rules
+To verify that the priorities (100 vs 10) are active in the switch hardware:
+```bash
+sudo ovs-ofctl -O OpenFlow13 dump-flows s2
+```
+```
+
+---
+
+### 💡 Why we added that command
+When you run `dump-ports-desc`, you are looking at the hardware-level statistics of the virtual switch. 
+* If the `tx_packets` and `rx_packets` are moving but you see no latency change, your pipe is still too big.
+* With the **0.5 Mbps** limit we set in the topology, that command should show the switch working at its limit, making your QoS logic the "hero" that saves the UDP packets from the queue!# SDN QoS Priority Controller
 
 ## Overview
 
