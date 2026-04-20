@@ -9,19 +9,20 @@ class QoSController(app_manager.RyuApp):
 
     def __init__(self, *args, **kwargs):
         super(QoSController, self).__init__(*args, **kwargs)
-        self.mac_to_port = {}
+        self.mac_to_port = {}  # MAC learning table: {dpid: {mac: port}}
 
     def add_flow(self, datapath, priority, match, actions, buffer_id=None):
-        ofproto = datapath.ofproto
-        parser = datapath.ofproto_parser
+        ofproto = datapath.ofproto  # datapath is the link to the specific switch 
+                                    # gives the protocol constants for that switch's OpenFlow version
+        parser = datapath.ofproto_parser #gives you the message builder — a factory for constructing OpenFlow messages. 
 
-        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)]
+        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS, actions)] # makes the action into an openflow object
 
         if buffer_id:
-            mod = parser.OFPFlowMod(
+            mod = parser.OFPFlowMod(    #modify the switch flow table  
                 datapath=datapath, buffer_id=buffer_id,
-                priority=priority, match=match, instructions=inst)
-        else:
+                priority=priority, match=match, instructions=inst) 
+        else:  # the rule is installed then the bytes have to be sent
             mod = parser.OFPFlowMod(
                 datapath=datapath, priority=priority,
                 match=match, instructions=inst)
@@ -34,10 +35,11 @@ class QoSController(app_manager.RyuApp):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
-        match = parser.OFPMatch()
+        # Table-miss rule: send unknown packets to controller
+        match = parser.OFPMatch()  #match everythin 
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
                                           ofproto.OFPCML_NO_BUFFER)]
-        self.add_flow(datapath, 0, match, actions)
+        self.add_flow(datapath, 0, match, actions) #sends unknown type of packet to add flow so that it marks that type of packet in the switch flow table
         self.logger.info("Switch connected: dpid=%s", datapath.id)
 
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
@@ -48,8 +50,8 @@ class QoSController(app_manager.RyuApp):
         parser = datapath.ofproto_parser
         in_port = msg.match['in_port']
 
-        pkt = packet.Packet(msg.data)
-        eth = pkt.get_protocol(ethernet.ethernet)
+        pkt = packet.Packet(msg.data) #decodes the raw data
+        eth = pkt.get_protocol(ethernet.ethernet) 
         if eth is None:
             return
 
@@ -59,7 +61,7 @@ class QoSController(app_manager.RyuApp):
 
         # Learn source MAC -> port mapping
         self.mac_to_port.setdefault(dpid, {})
-        self.mac_to_port[dpid][src] = in_port
+        self.mac_to_port[dpid][src] = in_port 
 
         # Determine output port
         if dst in self.mac_to_port[dpid]:
@@ -69,7 +71,7 @@ class QoSController(app_manager.RyuApp):
 
         actions = [parser.OFPActionOutput(out_port)]
 
-        # Install flow rule only for known destinations
+        # Install a flow rule only for IP traffic 
         if out_port != ofproto.OFPP_FLOOD:
             ip = pkt.get_protocol(ipv4.ipv4)
             if ip:
@@ -78,29 +80,26 @@ class QoSController(app_manager.RyuApp):
                         in_port=in_port, eth_dst=dst,
                         eth_type=0x0800, ip_proto=17)
                     priority = 100
-                    actions = [parser.OFPActionSetQueue(100), parser.OFPActionOutput(out_port)]
                     self.logger.info("UDP flow installed: %s -> %s (priority 100)", src, dst)
-
                 elif ip.proto == 6:  # TCP — low priority
                     match = parser.OFPMatch(
                         in_port=in_port, eth_dst=dst,
                         eth_type=0x0800, ip_proto=6)
                     priority = 10
-                    actions = [parser.OFPActionSetQueue(10), parser.OFPActionOutput(out_port)]
                     self.logger.info("TCP flow installed: %s -> %s (priority 10)", src, dst)
-
-                else:  # ICMP or other IP
+                else:  # ICMP or other IP — use protocol-specific match
                     match = parser.OFPMatch(
                         in_port=in_port, eth_dst=dst,
                         eth_type=0x0800, ip_proto=ip.proto)
                     priority = 1
-                    actions = [parser.OFPActionOutput(out_port)]
 
                 if msg.buffer_id != ofproto.OFP_NO_BUFFER:
                     self.add_flow(datapath, priority, match, actions, msg.buffer_id)
                     return
                 else:
                     self.add_flow(datapath, priority, match, actions)
+            # ARP: just forward, don't install a flow rule
+            # so future IP packets always reach the controller for QoS treatment
 
         # Send packet out
         data = None
