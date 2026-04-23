@@ -98,8 +98,7 @@ class QoSController(app_manager.RyuApp):
                     return
                 else:
                     self.add_flow(datapath, priority, match, actions)
-            # ARP: just forward, don't install a flow rule
-            # so future IP packets always reach the controller for QoS treatment
+          
 
         # Send packet out
         data = None
