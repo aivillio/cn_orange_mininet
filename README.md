@@ -174,3 +174,19 @@ sudo ovs-vsctl --all destroy queue
 |-------|---------|----------|----------|
 | 0 — HIGH | ICMP, UDP | 950 Kbps | 1 Mbps |
 | 1 — LOW  | TCP | 10 Kbps | 500 Kbps |
+
+
+## output 
+
+->base line ping test
+
+<img width="703" height="73" alt="image" src="https://github.com/user-attachments/assets/01468dbb-a5fb-4a19-b7e2-a92507720dcf" />
+
+-> with controller
+<img width="703" height="73" alt="image" src="https://github.com/user-attachments/assets/eb9f32b4-fb2f-4447-ae6d-310736de7296" />
+
+->without controller
+<img width="703" height="73" alt="image" src="https://github.com/user-attachments/assets/4fc6fa60-6ddd-4b0e-8d98-6f7bb2939740" />
+
+
+
