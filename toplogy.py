@@ -1,33 +1,34 @@
 from mininet.topo import Topo
-from mininet.link import TCLink
 
 class CustomTopo(Topo):
     def build(self):
-        # --- Add Hosts ---
-        # h1 will be our "Testing Host" (Pings)
-        # h2 will be our "Server" (iperf -s)
-        # h3 will be our "Congestion Source" (iperf -c)
+
+        # Add hosts
         h1 = self.addHost('h1')
         h2 = self.addHost('h2')
         h3 = self.addHost('h3')
+        h4 = self.addHost('h4')
+        h5 = self.addHost('h5')
 
-        # --- Add Switches ---
+        # Add switches
         s1 = self.addSwitch('s1')
         s2 = self.addSwitch('s2')
         s3 = self.addSwitch('s3')
-        
-        # --- Create Links ---
-        
-       
-        # These are kept fast (10 Mbps) so the bottleneck is between switches, not at the host.
-        self.addLink(h1, s1, cls=TCLink, bw=10)
-        self.addLink(h2, s2, cls=TCLink, bw=10)
-        self.addLink(h3, s3, cls=TCLink, bw=10)
+        s4 = self.addSwitch('s4')
+        s5 = self.addSwitch('s5')
 
-        # 2. Switch-to-Switch Bottleneck Links
-       
-        self.addLink(s1, s2, cls=TCLink, bw=0.5, delay='5ms', max_queue_size=10)
-        self.addLink(s2, s3, cls=TCLink, bw=0.5, delay='5ms', max_queue_size=10)
+        # Connect hosts
+        self.addLink(h1, s1)
+        self.addLink(h2, s3)
+        self.addLink(h3, s5)
+        self.addLink(h4, s2)
+        self.addLink(h5, s4)
 
-# This dictionary allows  a call  to the topo using '--topo customtopo'
+        # Backbone with constraints (IMPORTANT)
+        self.addLink(s1, s2, bw=1, delay='10ms')
+        self.addLink(s2, s3, bw=1, delay='10ms')
+        self.addLink(s3, s4, bw=1, delay='10ms')
+        self.addLink(s4, s5, bw=1, delay='10ms')
+
+# Register topology
 topos = {'customtopo': (lambda: CustomTopo())}
